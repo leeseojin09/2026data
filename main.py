@@ -213,6 +213,69 @@ with st.container(border=True):
 st.divider()
 
 # ---------------------------------------------------------
+# 네 번째 그래프: 스크린 수와 총 관객 산점도
+# ---------------------------------------------------------
+st.subheader("④ 개봉일 스크린 수와 총 관객의 관계")
+
+scatter_df = df.copy()
+
+scatter_df["first_scrn"] = pd.to_numeric(
+    scatter_df["first_scrn"], errors="coerce"
+)
+scatter_df["total_audi"] = pd.to_numeric(
+    scatter_df["total_audi"], errors="coerce"
+)
+
+scatter_df = scatter_df.dropna(
+    subset=["first_scrn", "total_audi"]
+)
+
+fig4 = px.scatter(
+    scatter_df,
+    x="first_scrn",
+    y="total_audi",
+    color="genre_first",
+    hover_name="movieNm",
+    title="개봉일 스크린 수와 총 관객의 관계",
+    labels={
+        "first_scrn": "개봉일 스크린 수",
+        "total_audi": "총 관객 수",
+        "genre_first": "장르"
+    }
+)
+
+fig4.update_traces(
+    marker=dict(size=10, opacity=0.75),
+    hovertemplate=
+    "<b>%{hovertext}</b><br>"
+    "개봉일 스크린 수: %{x}개<br>"
+    "총 관객: %{y:,.0f}명<br>"
+    "<extra></extra>"
+)
+
+fig4.update_layout(
+    xaxis_title="개봉일 스크린 수",
+    yaxis_title="총 관객 수",
+    legend_title="장르",
+    margin=dict(t=60, b=20, l=20, r=20)
+)
+
+st.plotly_chart(fig4, use_container_width=True)
+
+# ---------------------------------------------------------
+# 그래프 설명 영역
+# ---------------------------------------------------------
+with st.container(border=True):
+    st.markdown("### 💡 이 그래프로 알 수 있는 것")
+    st.text_input(
+        "한 문장으로 정리해 보세요.",
+        placeholder="예: 개봉 초기 스크린 수가 많을수록 총 관객 수도 증가하는 경향이 있는지 살펴볼 수 있다.",
+        key="graph4_observation"
+    )
+
+st.divider()
+
+# ---------------------------------------------------------
 # 원본 데이터 일부 확인
 # ---------------------------------------------------------
 with st.expander("📊 사용한 데이터 확인하기"):
