@@ -109,6 +109,50 @@ with st.container(border=True):
 st.divider()
 
 # ---------------------------------------------------------
+# 두 번째 그래프: 장르 안의 영화 트리맵
+# ---------------------------------------------------------
+st.subheader("② 장르별 영화 총 관객 트리맵")
+
+# 총 관객을 숫자로 변환
+treemap_df = df.copy()
+treemap_df["total_audi"] = pd.to_numeric(
+    treemap_df["total_audi"], errors="coerce"
+).fillna(0)
+
+# 트리맵에서 영화별 면적은 총 관객 수에 비례
+fig2 = px.treemap(
+    treemap_df,
+    path=["genre_first", "movieNm"],
+    values="total_audi",
+    title="장르 안에 포함된 영화와 총 관객",
+)
+
+# 영화 칸에 마우스를 올렸을 때 영화명과 총 관객 표시
+fig2.update_traces(
+    hovertemplate="<b>%{label}</b><br>총 관객: %{value:,.0f}명<extra></extra>",
+    root_color="lightgray"
+)
+
+fig2.update_layout(
+    margin=dict(t=60, b=20, l=20, r=20)
+)
+
+st.plotly_chart(fig2, use_container_width=True)
+
+# ---------------------------------------------------------
+# 그래프 설명 영역
+# ---------------------------------------------------------
+with st.container(border=True):
+    st.markdown("### 💡 이 그래프로 알 수 있는 것")
+    st.text_input(
+        "한 문장으로 정리해 보세요.",
+        placeholder="예: 어떤 장르에 총 관객이 많은 영화가 많이 포함되어 있는지 알 수 있다.",
+        key="graph2_observation"
+    )
+
+st.divider()
+
+# ---------------------------------------------------------
 # 원본 데이터 일부 확인
 # ---------------------------------------------------------
 with st.expander("📊 사용한 데이터 확인하기"):
