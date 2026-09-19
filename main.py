@@ -385,5 +385,6 @@ with st.expander("📋 회귀분석에 사용된 연도별 데이터"):
     st.dataframe(
         display_df,
         use_container_width=True,
-        hide_index=True
+        hide_index=True)
+    
 
