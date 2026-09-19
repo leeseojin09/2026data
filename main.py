@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -12,8 +13,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🌡️ 기온 예측기")
-st.caption("서울의 연평균기온 데이터를 이용한 선형회귀 기반 기온 예측")
+st.title("🌡️ 서울 기온 예측기")
+st.caption("서울 연평균기온의 장기 변화와 최근 20년 변화 비교")
 
 # ---------------------------------------------------------
 # 데이터 주소
@@ -30,16 +31,11 @@ DATA_URL = (
 def load_data():
     df = pd.read_csv(DATA_URL, encoding="utf-8-sig")
 
-    # 날짜 변환
     df["날짜"] = pd.to_datetime(df["날짜"], errors="coerce")
-
-    # 필요한 열 숫자형 변환
     df["평균기온"] = pd.to_numeric(df["평균기온"], errors="coerce")
 
-    # 결측값 제거
     df = df.dropna(subset=["날짜", "평균기온"])
 
-    # 연도 생성
     df["연도"] = df["날짜"].dt.year
 
     return df
@@ -48,13 +44,13 @@ def load_data():
 df = load_data()
 
 # ---------------------------------------------------------
-# 연도별 데이터 계산
-# ---------------------------------------------------------
-
 # 2025년까지의 데이터만 사용
+# ---------------------------------------------------------
 df = df[df["연도"] <= 2025].copy()
 
-# 연도별 관측일 수와 평균기온 계산
+# ---------------------------------------------------------
+# 연도별 평균기온 및 관측일수 계산
+# ---------------------------------------------------------
 yearly = (
     df.groupby("연도")
     .agg(
@@ -64,77 +60,156 @@ yearly = (
     .reset_index()
 )
 
-# 관측일이 300일 미만인 연도 제거
+# 관측일이 300일 미만인 해 제거
 yearly = yearly[yearly["관측일수"] >= 300].copy()
 
-# 1908년 이후만 회귀분석에 사용
+# 1908년 이후만 사용
 yearly = yearly[yearly["연도"] >= 1908].copy()
 
-# 정렬
 yearly = yearly.sort_values("연도").reset_index(drop=True)
 
 # ---------------------------------------------------------
-# 독립변수: 1908년부터 지난 연수
+# 전체 기간 회귀분석
+# 독립변수 = 1908년부터 지난 연수
 # ---------------------------------------------------------
 yearly["지난연수"] = yearly["연도"] - 1908
 
-# ---------------------------------------------------------
-# 선형회귀 계산
-# y = a*x + b
-# ---------------------------------------------------------
-x = yearly["지난연수"].to_numpy()
-y = yearly["연평균기온"].to_numpy()
+x_all = yearly["지난연수"].to_numpy()
+y_all = yearly["연평균기온"].to_numpy()
 
-slope, intercept = np.polyfit(x, y, 1)
+slope_all, intercept_all = np.polyfit(x_all, y_all, 1)
 
-# 회귀선 예측값
-yearly["회귀예측기온"] = slope * yearly["지난연수"] + intercept
+# 1년에 몇 도 변화하는지
+annual_slope_all = slope_all
+
+# 100년에 몇 도 변화하는지
+hundred_year_slope_all = slope_all * 100
 
 # 상관계수
-correlation = np.corrcoef(x, y)[0, 1]
+correlation_all = np.corrcoef(x_all, y_all)[0, 1]
 
 # 결정계수
-r_squared = correlation ** 2
+r_squared_all = correlation_all ** 2
 
-# 회귀식
-if intercept >= 0:
-    equation = f"y = {slope:.4f}x + {intercept:.4f}"
-else:
-    equation = f"y = {slope:.4f}x - {abs(intercept):.4f}"
+# 전체 회귀선
+yearly["전체회귀예측"] = (
+    slope_all * yearly["지난연수"] + intercept_all
+)
 
 # ---------------------------------------------------------
-# 화면 상단 정보
+# 최근 20년 데이터
+# 2006년 ~ 2025년
 # ---------------------------------------------------------
-col1, col2, col3, col4 = st.columns(4)
+recent_start = 2025 - 19
+recent_end = 2025
+
+recent = yearly[
+    (yearly["연도"] >= recent_start) &
+    (yearly["연도"] <= recent_end)
+].copy()
+
+# 최근 20년 회귀분석
+# 연도 자체를 x로 사용
+x_recent = recent["연도"].to_numpy()
+y_recent = recent["연평균기온"].to_numpy()
+
+slope_recent, intercept_recent = np.polyfit(
+    x_recent,
+    y_recent,
+    1
+)
+
+# 100년에 몇 도 변화하는지
+hundred_year_slope_recent = slope_recent * 100
+
+# 최근 20년 상관계수
+correlation_recent = np.corrcoef(
+    x_recent,
+    y_recent
+)[0, 1]
+
+r_squared_recent = correlation_recent ** 2
+
+# 최근 20년 회귀선
+recent["최근20년회귀예측"] = (
+    slope_recent * recent["연도"] + intercept_recent
+)
+
+# ---------------------------------------------------------
+# 상단 기본 정보
+# ---------------------------------------------------------
+st.subheader("📊 기온 상승 속도")
+
+col1, col2 = st.columns(2)
 
 with col1:
     st.metric(
-        "회귀에 사용한 연도 수",
-        f"{len(yearly)}개"
+        "전체 기간",
+        f"{hundred_year_slope_all:+.2f} °C / 100년"
+    )
+    st.caption(
+        f"{yearly['연도'].min()}~{yearly['연도'].max()}년"
     )
 
 with col2:
     st.metric(
-        "시작 연도",
-        f"{yearly['연도'].min()}년"
+        "최근 20년",
+        f"{hundred_year_slope_recent:+.2f} °C / 100년"
     )
-
-with col3:
-    st.metric(
-        "끝 연도",
-        f"{yearly['연도'].max()}년"
-    )
-
-with col4:
-    st.metric(
-        "상관계수",
-        f"{correlation:.4f}"
+    st.caption(
+        f"{recent_start}~{recent_end}년"
     )
 
 # ---------------------------------------------------------
-# 선택 연도
+# 비교 설명
 # ---------------------------------------------------------
-st.subheader("🔎 연도별 예상 기온")
+st.info(
+    "기울기는 '1년 동안 몇 °C 변하는가'를 100배하여 "
+    "'100년에 몇 °C 변하는가'로 나타낸 값입니다."
+)
+
+# ---------------------------------------------------------
+# 회귀분석 상세 비교
+# ---------------------------------------------------------
+st.subheader("🔎 회귀분석 비교")
+
+comparison = pd.DataFrame({
+    "구분": [
+        "전체 기간",
+        "최근 20년"
+    ],
+    "기간": [
+        f"{yearly['연도'].min()}~{yearly['연도'].max()}",
+        f"{recent_start}~{recent_end}"
+    ],
+    "사용 연도 수": [
+        len(yearly),
+        len(recent)
+    ],
+    "100년당 변화": [
+        f"{hundred_year_slope_all:+.2f} °C",
+        f"{hundred_year_slope_recent:+.2f} °C"
+    ],
+    "상관계수": [
+        f"{correlation_all:.4f}",
+        f"{correlation_recent:.4f}"
+    ],
+    "결정계수 R²": [
+        f"{r_squared_all:.4f}",
+        f"{r_squared_recent:.4f}"
+    ]
+})
+
+st.dataframe(
+    comparison,
+    use_container_width=True,
+    hide_index=True
+)
+
+# ---------------------------------------------------------
+# 연도 선택
+# ---------------------------------------------------------
+st.subheader("🔮 연도별 예상 기온")
 
 selected_year = st.slider(
     "예측할 연도를 선택하세요",
@@ -144,9 +219,12 @@ selected_year = st.slider(
     step=1
 )
 
-# 선택한 연도의 예측값
+# 전체 기간 회귀식으로 예측
 selected_x = selected_year - 1908
-predicted_temp = slope * selected_x + intercept
+
+predicted_temp = (
+    slope_all * selected_x + intercept_all
+)
 
 st.metric(
     label=f"{selected_year}년 예상 연평균기온",
@@ -154,18 +232,18 @@ st.metric(
 )
 
 st.caption(
-    "※ 예상 기온은 1908년부터의 경과 연수를 독립변수로 한 "
-    "선형회귀 결과입니다."
+    "※ 2026년 이후의 값은 실제 관측값이 아니라 "
+    "전체 기간 회귀식을 미래로 연장한 예측값입니다."
 )
 
 # ---------------------------------------------------------
 # 그래프
 # ---------------------------------------------------------
-st.subheader("📈 연도별 평균기온과 회귀 직선")
+st.subheader("📈 연평균기온과 회귀선")
 
 fig = go.Figure()
 
-# 실제 연평균기온 산점도
+# 실제 연평균기온
 fig.add_trace(
     go.Scatter(
         x=yearly["연도"],
@@ -184,22 +262,37 @@ fig.add_trace(
     )
 )
 
-# 회귀 직선
+# 전체 기간 회귀선
 fig.add_trace(
     go.Scatter(
         x=yearly["연도"],
-        y=yearly["회귀예측기온"],
+        y=yearly["전체회귀예측"],
         mode="lines",
-        name="회귀 직선",
+        name="전체 기간 회귀선",
         hovertemplate=(
             "연도: %{x}년<br>"
-            "회귀 예측값: %{y:.2f} °C"
+            "회귀값: %{y:.2f} °C"
             "<extra></extra>"
         )
     )
 )
 
-# 선택한 연도의 예측 위치
+# 최근 20년 회귀선
+fig.add_trace(
+    go.Scatter(
+        x=recent["연도"],
+        y=recent["최근20년회귀예측"],
+        mode="lines",
+        name="최근 20년 회귀선",
+        hovertemplate=(
+            "연도: %{x}년<br>"
+            "회귀값: %{y:.2f} °C"
+            "<extra></extra>"
+        )
+    )
+)
+
+# 선택한 연도의 예측값
 fig.add_trace(
     go.Scatter(
         x=[selected_year],
@@ -242,48 +335,57 @@ st.plotly_chart(
 )
 
 # ---------------------------------------------------------
-# 회귀분석 결과
+# 회귀식
 # ---------------------------------------------------------
-st.subheader("📊 회귀분석 결과")
+st.subheader("📐 회귀식")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.write("**회귀식**")
+    st.write("**전체 기간 회귀식**")
     st.code(
-        f"연평균기온 = {slope:.4f} × (연도 - 1908) + {intercept:.4f}"
+        f"연평균기온 = {slope_all:.4f} × (연도 - 1908) "
+        f"+ {intercept_all:.4f}"
+    )
+    st.write(
+        f"→ 100년당 **{hundred_year_slope_all:+.2f} °C**"
     )
 
 with col2:
-    st.write("**결정계수 (R²)**")
-    st.metric(
-        "R²",
-        f"{r_squared:.4f}"
+    st.write("**최근 20년 회귀식**")
+    st.code(
+        f"연평균기온 = {slope_recent:.4f} × 연도 "
+        f"+ {intercept_recent:.4f}"
+    )
+    st.write(
+        f"→ 100년당 **{hundred_year_slope_recent:+.2f} °C**"
     )
 
-st.write(
-    f"상관계수 r = **{correlation:.4f}**"
-)
-
-st.info(
-    f"회귀분석에는 **{len(yearly)}개 연도**가 사용되었으며, "
-    f"**{yearly['연도'].min()}년부터 {yearly['연도'].max()}년까지**의 "
-    f"연평균기온을 사용했습니다."
-)
-
 # ---------------------------------------------------------
-# 데이터 확인
+# 사용 데이터
 # ---------------------------------------------------------
-with st.expander("📋 회귀분석에 사용된 연도별 데이터 보기"):
+with st.expander("📋 회귀분석에 사용된 연도별 데이터"):
     display_df = yearly[
-        ["연도", "관측일수", "연평균기온", "지난연수", "회귀예측기온"]
+        [
+            "연도",
+            "관측일수",
+            "연평균기온",
+            "지난연수",
+            "전체회귀예측"
+        ]
     ].copy()
 
-    display_df["연평균기온"] = display_df["연평균기온"].round(2)
-    display_df["회귀예측기온"] = display_df["회귀예측기온"].round(2)
+    display_df["연평균기온"] = (
+        display_df["연평균기온"].round(2)
+    )
+
+    display_df["전체회귀예측"] = (
+        display_df["전체회귀예측"].round(2)
+    )
 
     st.dataframe(
         display_df,
         use_container_width=True,
         hide_index=True
     )
+```
