@@ -1,86 +1,66 @@
-# pages/1_탐색.py — 나이·혈당의 분포, 두 무리 비교, 고혈압·심장병별 비율, 빈 값 살펴보기
+# main.py — 뇌졸중 예측 실습실: 이 데이터가 무엇인지 소개하는 첫 화면
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 
-st.set_page_config(page_title="탐색", page_icon="🔍", layout="wide")
-st.title("🔍 탐색")
-st.write("모델을 만들기 전에 데이터를 들여다봅니다. 화면의 값을 교재의 빈 표에 적으세요.")
+st.set_page_config(page_title="뇌졸중 예측 실습실", page_icon="🩺", layout="wide")
+st.title("🩺 뇌졸중 예측 실습실")
+st.write("건강 기록 5,110명분을 읽어 옵니다. 왼쪽 메뉴에서 페이지를 넘기며 들여다보고, 모델을 만들고, 채점합니다.")
 
 데이터주소 = "https://raw.githubusercontent.com/greatsong/modudata/main/data/stroke.csv"
 
 
 @st.cache_data
 def 데이터_읽기():
+    """UTF-8로 저장된 csv를 읽는다. bmi 열의 빈 값은 그대로 빈 값으로 남는다."""
     return pd.read_csv(데이터주소, encoding="utf-8")
 
 
 df = 데이터_읽기()
-df["뇌졸중"] = df["stroke"].map({1: "뇌졸중 있음", 0: "뇌졸중 없음"})
 
-st.subheader("1. 나이와 평균 혈당은 어떻게 퍼져 있는가")
-왼쪽, 오른쪽 = st.columns(2)
-with 왼쪽:
-    st.plotly_chart(px.histogram(df, x="age", nbins=40, title="나이 분포",
-                                 labels={"age": "나이", "count": "사람 수"}), width="stretch")
-with 오른쪽:
-    st.plotly_chart(px.histogram(df, x="avg_glucose_level", nbins=40, title="평균 혈당 분포",
-                                 labels={"avg_glucose_level": "평균 혈당", "count": "사람 수"}), width="stretch")
+st.subheader("한눈에 보기")
+칸1, 칸2, 칸3, 칸4 = st.columns(4)
+칸1.metric("전체 사람 수", f"{len(df):,}명")
+칸2.metric("열 개수", f"{df.shape[1]}개")
+칸3.metric("뇌졸중을 겪은 사람", f"{int(df['stroke'].sum()):,}명")
+칸4.metric("그 비율", f"{df['stroke'].mean() * 100:.2f}%")
 
-st.subheader("2. 뇌졸중을 겪은 사람과 겪지 않은 사람은 무엇이 다른가")
-왼쪽, 오른쪽 = st.columns(2)
-with 왼쪽:
-    st.plotly_chart(px.box(df, x="뇌졸중", y="age", color="뇌졸중", title="나이 비교",
-                           labels={"age": "나이"}), width="stretch")
-with 오른쪽:
-    st.plotly_chart(px.box(df, x="뇌졸중", y="avg_glucose_level", color="뇌졸중", title="평균 혈당 비교",
-                           labels={"avg_glucose_level": "평균 혈당"}), width="stretch")
-
-두무리 = df.groupby("뇌졸중").agg(
-    평균_나이=("age", "mean"),
-    평균_혈당=("avg_glucose_level", "mean"),
-    고혈압_비율=("hypertension", "mean"),
-    심장병_비율=("heart_disease", "mean"),
-    사람_수=("id", "size"),
-).reset_index()
-두무리["평균_나이"] = 두무리["평균_나이"].round(1)
-두무리["평균_혈당"] = 두무리["평균_혈당"].round(1)
-두무리["고혈압_비율"] = (두무리["고혈압_비율"] * 100).round(1).astype(str) + "%"
-두무리["심장병_비율"] = (두무리["심장병_비율"] * 100).round(1).astype(str) + "%"
-st.dataframe(두무리, width="stretch", hide_index=True)
-
-st.subheader("3. 고혈압과 심장병이 있으면 뇌졸중 비율이 다른가")
+st.subheader("열마다 무엇이 들어 있는가")
+st.caption("우리말 뜻 칸은 비어 있습니다. 교재의 열 대응표를 보고 직접 채워 넣으세요. 적은 내용은 저장되지 않습니다.")
 
 
-def 비율표(열, 이름):
-    """0과 1로 적힌 열마다 뇌졸중 비율을 구한다."""
-    표 = df.groupby(열)["stroke"].mean().reset_index()
-    표[열] = 표[열].map({1: f"{이름} 있음", 0: f"{이름} 없음"})
-    표["뇌졸중 비율(%)"] = (표["stroke"] * 100).round(2)
-    return 표.rename(columns={열: "구분"})[["구분", "뇌졸중 비율(%)"]]
+def 값의_종류(열):
+    """숫자 열은 가장 작은 값과 가장 큰 값을, 글자 열은 값의 가짓수와 실제 값을 적는다."""
+    칸 = df[열].dropna()
+    if pd.api.types.is_numeric_dtype(칸) and 칸.nunique() > 2:
+        return f"숫자 {칸.min():g} ~ {칸.max():g}"
+    값들 = sorted(칸.unique().astype(str))
+    return f"{len(값들)}가지 · " + " · ".join(값들)
 
 
-왼쪽, 오른쪽 = st.columns(2)
-with 왼쪽:
-    st.plotly_chart(px.bar(비율표("hypertension", "고혈압"), x="구분", y="뇌졸중 비율(%)",
-                           title="고혈압 여부별 뇌졸중 비율", text="뇌졸중 비율(%)"), width="stretch")
-with 오른쪽:
-    st.plotly_chart(px.bar(비율표("heart_disease", "심장병"), x="구분", y="뇌졸중 비율(%)",
-                           title="심장병 여부별 뇌졸중 비율", text="뇌졸중 비율(%)"), width="stretch")
-
-st.subheader("4. bmi가 비어 있는 사람들은 누구인가")
-빈사람 = df[df["bmi"].isna()]
-빈값표 = pd.DataFrame({
-    "구분": ["bmi가 비어 있는 사람", "전체"],
-    "사람 수": [len(빈사람), len(df)],
-    "그중 뇌졸중": [int(빈사람["stroke"].sum()), int(df["stroke"].sum())],
-    "뇌졸중 비율(%)": [round(빈사람["stroke"].mean() * 100, 2), round(df["stroke"].mean() * 100, 2)],
+열설명 = pd.DataFrame({
+    "열 이름": df.columns,
+    "우리말 뜻": [""] * df.shape[1],
+    "값의 종류": [값의_종류(열) for 열 in df.columns],
+    "빈 값 개수": [int(df[열].isna().sum()) for 열 in df.columns],
 })
-st.dataframe(빈값표, width="stretch", hide_index=True)
-st.caption("비어 있다는 것도 데이터입니다. 이 사람들을 어떻게 할지는 다음 시간에 정합니다.")
+st.data_editor(
+    열설명,
+    width="stretch",
+    hide_index=True,
+    disabled=["열 이름", "값의 종류", "빈 값 개수"],   # 우리말 뜻 칸만 고쳐 쓸 수 있다
+    key="열설명표",
+)
 
-st.subheader("5. 흡연 상태에는 어떤 값이 적혀 있는가")
-흡연 = df["smoking_status"].value_counts().reset_index()
-흡연.columns = ["흡연 상태", "사람 수"]
-흡연["비율(%)"] = (흡연["사람 수"] / len(df) * 100).round(1)
-st.dataframe(흡연, width="stretch", hide_index=True)
+st.subheader("앞 다섯 줄 그대로 보기")
+st.dataframe(df.head(5), width="stretch", hide_index=True)
+
+st.subheader("이 데이터는 어디서 왔는가")
+출처_기본값 = """출처: 캐글 Stroke Prediction Dataset (게시자 fedesoriano, 2021-01-26 공개)
+원본 주소: https://www.kaggle.com/datasets/fedesoriano/stroke-prediction-dataset
+라이선스: Data files © Original Authors
+게시자가 적은 문구: (Confidential Source) - Use only for educational purposes
+이 수업에서는 교육 목적으로만 사용합니다."""
+st.text_area("교재를 보고 여기에 적습니다", value=출처_기본값, height=170, key="출처")
+st.caption("이 데이터를 올린 사람은 원본 데이터가 어디서 왔는지 밝히지 않았고, 교육 목적으로만 사용하라고 적어 두었습니다. "
+           "이름이나 생년월일이 없어 실제 환자를 찾아낼 수는 없지만, 출처를 알 수 없는 데이터로 얻은 결과를 "
+           "실제 의학적 판단에 사용해서는 안 됩니다.")
