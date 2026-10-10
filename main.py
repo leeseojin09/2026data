@@ -2,7 +2,12 @@
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="뇌졸중 예측 실습실", page_icon="🩺", layout="wide")
+st.set_page_config(
+    page_title="뇌졸중 예측 실습실",
+    page_icon="🩺",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 st.title("🩺 뇌졸중 예측 실습실")
 st.write("건강 기록 5,110명분을 읽어 옵니다. 왼쪽 메뉴에서 페이지를 넘기며 들여다보고, 모델을 만들고, 채점합니다.")
 
