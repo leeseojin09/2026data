@@ -1,0 +1,437 @@
+
+# pages/2_분류_모델.py — 뇌졸중 분류 모델 실습
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.tree import DecisionTreeClassifier, export_text
+
+st.title("🌳 뇌졸중 분류 모델")
+st.write(
+    "여러 건강 속성으로 뇌졸중 여부를 분류하는 실습입니다. "
+    "확률 모델과 질문형 모델의 결과를 비교합니다."
+)
+
+DATA_URL = (
+    "https://raw.githubusercontent.com/"
+    "greatsong/modudata/main/data/stroke.csv"
+)
+
+속성목록 = [
+    "age",
+    "avg_glucose_level",
+    "bmi",
+    "hypertension",
+    "heart_disease",
+]
+
+속성뜻 = {
+    "age": "나이",
+    "avg_glucose_level": "평균 혈당 수준",
+    "bmi": "체질량지수(BMI)",
+    "hypertension": "고혈압 여부",
+    "heart_disease": "심장병 여부",
+}
+
+
+@st.cache_data
+def 데이터_읽기():
+    return pd.read_csv(DATA_URL, encoding="utf-8")
+
+
+try:
+    df = 데이터_읽기()
+except Exception as e:
+    st.error(f"데이터를 불러오지 못했습니다: {e}")
+    st.stop()
+
+필수열 = set(속성목록 + ["stroke"])
+if not 필수열.issubset(df.columns):
+    st.error("데이터에 필요한 열이 없습니다.")
+    st.stop()
+
+# 번호 순으로 정렬
+if "id" in df.columns:
+    df = df.sort_values("id", kind="stable").reset_index(drop=True)
+else:
+    df = df.reset_index(drop=True)
+
+# 정답과 입력값 정리
+df["stroke"] = pd.to_numeric(df["stroke"], errors="coerce")
+df = df[df["stroke"].isin([0, 1])].reset_index(drop=True)
+
+if len(df) <= 3:
+    st.error("채점용 3명과 학습용 데이터를 나눌 만큼 자료가 충분하지 않습니다.")
+    st.stop()
+
+# 앞의 세 명은 채점용으로 고정
+test_df = df.iloc[:3].copy()
+train_df = df.iloc[3:].copy()
+
+st.subheader("1. 입력 속성 선택")
+
+선택속성 = st.multiselect(
+    "모델 학습에 사용할 속성을 고르세요.",
+    options=속성목록,
+    default=[
+        "age",
+        "avg_glucose_level",
+        "hypertension",
+        "heart_disease",
+    ],
+    format_func=lambda x: f"{x} — {속성뜻[x]}",
+    key="분류_속성선택",
+)
+
+if len(선택속성) < 2:
+    st.warning("입력 속성을 두 개 이상 선택해 주세요.")
+    st.stop()
+
+st.caption(
+    "채점용 데이터는 앞의 3명으로 고정됩니다. "
+    "나머지 데이터만 학습 및 전처리에 사용합니다."
+)
+
+# 선택한 속성만 사용하고 숫자로 변환
+X_train_raw = train_df[선택속성].apply(
+    pd.to_numeric, errors="coerce"
+)
+X_test_raw = test_df[선택속성].apply(
+    pd.to_numeric, errors="coerce"
+)
+
+y_train = train_df["stroke"].astype(int)
+y_test = test_df["stroke"].astype(int)
+
+# 훈련용 중앙값으로 결측값을 채운다.
+# BMI는 선택했을 때만 입력 속성에 포함되므로 선택한 경우에만 처리된다.
+중앙값채우기 = SimpleImputer(strategy="median")
+X_train = pd.DataFrame(
+    중앙값채우기.fit_transform(X_train_raw),
+    columns=선택속성,
+    index=train_df.index,
+)
+X_test = pd.DataFrame(
+    중앙값채우기.transform(X_test_raw),
+    columns=선택속성,
+    index=test_df.index,
+)
+
+if y_train.nunique() < 2:
+    st.error(
+        "훈련용 데이터에 뇌졸중과 비뇌졸중 사례가 모두 있어야 "
+        "두 분류 모델을 학습할 수 있습니다."
+    )
+    st.stop()
+
+# 2. 확률 모델: 로지스틱 회귀
+확률모델 = Pipeline([
+    ("크기맞추기", StandardScaler()),
+    ("분류", LogisticRegression(
+        max_iter=2000,
+        random_state=42,
+    )),
+])
+확률모델.fit(X_train, y_train)
+
+확률예측 = 확률모델.predict_proba(X_test)[
+    :, list(확률모델.named_steps["분류"].classes_).index(1)
+]
+확률분류 = (확률예측 >= 0.5).astype(int)
+
+# 3. 질문형 모델: 결정 트리
+# 최대 질문 깊이는 3, 마지막 마디에 5명 미만이면 더 나누지 않는다.
+질문모델 = DecisionTreeClassifier(
+    max_depth=3,
+    min_samples_leaf=5,
+    random_state=42,
+)
+질문모델.fit(X_train, y_train)
+
+질문분류 = 질문모델.predict(X_test)
+
+# 4. 아무 입력도 보지 않는 기준 모델
+다수정답 = int(y_train.value_counts().idxmax())
+기준분류 = np.full(len(y_test), 다수정답)
+
+def 정확도(실제, 예측):
+    return float(np.mean(np.asarray(실제) == np.asarray(예측)))
+
+
+확률정확도 = 정확도(y_test, 확률분류)
+질문정확도 = 정확도(y_test, 질문분류)
+기준정확도 = 정확도(y_test, 기준분류)
+
+st.subheader("2. 채점 결과")
+
+st.caption(
+    f"학습용 {len(train_df):,}명 · 채점용 {len(test_df)}명 · "
+    f"선택한 속성 {len(선택속성)}개"
+)
+
+카드1, 카드2, 카드3 = st.columns(3)
+
+카드1.metric(
+    "확률 모델 정확도",
+    f"{확률정확도 * 100:.1f}%",
+)
+카드2.metric(
+    "질문형 모델 정확도",
+    f"{질문정확도 * 100:.1f}%",
+)
+카드3.metric(
+    "다수 클래스 기준 정확도",
+    f"{기준정확도 * 100:.1f}%",
+)
+
+st.caption(
+    "정확도 = 맞게 분류한 사람 수 ÷ 채점용 전체 사람 수 × 100. "
+    "채점용은 3명뿐이므로 결과가 크게 변할 수 있습니다."
+)
+
+st.subheader("3. 채점용 사람별 예측")
+
+결과표 = pd.DataFrame({
+    "데이터 번호": test_df["id"].values
+    if "id" in test_df.columns
+    else test_df.index + 1,
+    "실제 결과": np.where(y_test.to_numpy() == 1, "뇌졸중", "아님"),
+    "확률 모델의 뇌졸중 확률": [
+        f"{p * 100:.1f}%" for p in 확률예측
+    ],
+    "확률 모델 예측": np.where(확률분류 == 1, "뇌졸중", "아님"),
+    "질문형 모델 예측": np.where(질문분류 == 1, "뇌졸중", "아님"),
+    "기준 모델 예측": np.where(기준분류 == 1, "뇌졸중", "아님"),
+})
+
+st.dataframe(결과표, use_container_width=True, hide_index=True)
+
+st.subheader("4. 질문형 모델이 던지는 질문의 순서")
+
+질문문자열 = export_text(
+    질문모델,
+    feature_names=[속성뜻[x] for x in 선택속성],
+    decimals=3,
+)
+
+st.code(질문문자열, language="text")
+
+st.caption(
+    "트리의 위쪽 질문부터 순서대로 확인합니다. "
+    "질문을 최대 3단계까지만 사용하고, "
+    "각 말단 마디에 최소 5명의 학습 사례가 남도록 설정했습니다."
+)
+
+st.subheader("5. 두 속성으로 분류 경계 살펴보기")
+
+축1, 축2 = st.columns(2)
+
+with 축1:
+    x축 = st.selectbox(
+        "가로축 속성",
+        options=선택속성,
+        index=0,
+        format_func=lambda x: f"{속성뜻[x]} ({x})",
+        key="분류_x축",
+    )
+
+with 축2:
+    y축_후보 = [x for x in 선택속성 if x != x축]
+    y축 = st.selectbox(
+        "세로축 속성",
+        options=y축_후보,
+        index=0,
+        format_func=lambda x: f"{속성뜻[x]} ({x})",
+        key="분류_y축",
+    )
+
+# 두 축만으로 별도 학습한 확률 모델
+두축속성 = [x축, y축]
+X_train_2d = X_train[두축속성]
+두축확률모델 = Pipeline([
+    ("크기맞추기", StandardScaler()),
+    ("분류", LogisticRegression(
+        max_iter=2000,
+        random_state=42,
+    )),
+])
+두축확률모델.fit(X_train_2d, y_train)
+
+# 두 축만으로 학습한 질문형 모델
+두축질문모델 = DecisionTreeClassifier(
+    max_depth=3,
+    min_samples_leaf=5,
+    random_state=42,
+)
+두축질문모델.fit(X_train_2d, y_train)
+
+# 훈련용 범위를 기준으로 격자를 생성한다.
+x_min = float(X_train_2d[x축].min())
+x_max = float(X_train_2d[x축].max())
+y_min = float(X_train_2d[y축].min())
+y_max = float(X_train_2d[y축].max())
+
+x_pad = max((x_max - x_min) * 0.05, 0.1)
+y_pad = max((y_max - y_min) * 0.05, 0.1)
+
+xx, yy = np.meshgrid(
+    np.linspace(x_min - x_pad, x_max + x_pad, 180),
+    np.linspace(y_min - y_pad, y_max + y_pad, 180),
+)
+
+격자 = pd.DataFrame({
+    x축: xx.ravel(),
+    y축: yy.ravel(),
+})
+
+# 질문형 모델의 두 축 분류 영역
+트리확률 = 두축질문모델.predict_proba(격자)[
+    :, list(두축질문모델.classes_).index(1)
+].reshape(xx.shape)
+
+# Plotly만 사용하여 그린다.
+fig = go.Figure()
+
+# 결정 트리 영역을 옅은 색으로 표시
+fig.add_trace(go.Contour(
+    x=np.linspace(x_min - x_pad, x_max + x_pad, 180),
+    y=np.linspace(y_min - y_pad, y_max + y_pad, 180),
+    z=트리확률,
+    showscale=False,
+    opacity=0.22,
+    contours=dict(
+        start=0,
+        end=1,
+        size=0.5,
+        coloring="fill",
+        showlines=False,
+    ),
+    colorscale=[
+        [0.0, "#4C78A8"],
+        [0.499, "#4C78A8"],
+        [0.5, "#E45756"],
+        [1.0, "#E45756"],
+    ],
+    hoverinfo="skip",
+    name="질문형 모델 분류 영역",
+))
+
+# 두 축 확률 모델의 0.5 경계선
+경계확률 = 두축확률모델.predict_proba(격자)[
+    :, list(두축확률모델.named_steps["분류"].classes_).index(1)
+].reshape(xx.shape)
+
+fig.add_trace(go.Contour(
+    x=np.linspace(x_min - x_pad, x_max + x_pad, 180),
+    y=np.linspace(y_min - y_pad, y_max + y_pad, 180),
+    z=경계확률,
+    contours=dict(
+        start=0.5,
+        end=0.5,
+        size=1,
+        coloring="none",
+        showlines=True,
+    ),
+    line=dict(color="black", width=3),
+    showscale=False,
+    hoverinfo="skip",
+    name="확률 0.5 경계선",
+))
+
+# 채점용 세 사람을 실제 정답에 따라 구분
+실제문자 = np.where(y_test.to_numpy() == 1, "뇌졸중", "아님")
+
+fig.add_trace(go.Scatter(
+    x=X_test[x축],
+    y=X_test[y축],
+    mode="markers+text",
+    text=[
+        f"사람 {i + 1}"
+        for i in range(len(test_df))
+    ],
+    textposition="top center",
+    marker=dict(
+        size=13,
+        color=np.where(y_test.to_numpy() == 1, "#E45756", "#4C78A8"),
+        line=dict(color="white", width=1),
+    ),
+    name="채점용 사람",
+    customdata=np.column_stack([
+        실제문자,
+        확률분류,
+        질문분류,
+    ]),
+    hovertemplate=(
+        "가로축: %{x:.3f}<br>"
+        "세로축: %{y:.3f}<br>"
+        "실제 결과: %{customdata[0]}<br>"
+        "확률 모델: %{customdata[1]}<br>"
+        "질문형 모델: %{customdata[2]}"
+        "<extra></extra>"
+    ),
+))
+
+# 별도 범례: 실제 정답의 색상 의미
+fig.add_trace(go.Scatter(
+    x=[None],
+    y=[None],
+    mode="markers",
+    marker=dict(size=10, color="#4C78A8"),
+    name="실제: 뇌졸중 아님",
+))
+fig.add_trace(go.Scatter(
+    x=[None],
+    y=[None],
+    mode="markers",
+    marker=dict(size=10, color="#E45756"),
+    name="실제: 뇌졸중",
+))
+
+fig.update_layout(
+    title="채점용 데이터와 두 축 분류 경계",
+    xaxis_title=f"{속성뜻[x축]} ({x축})",
+    yaxis_title=f"{속성뜻[y축]} ({y축})",
+    template="plotly_white",
+    height=650,
+    legend_title="범례",
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# 0.5 경계선이 현재 그림 범위와 만나는지 검사
+경계값 = 경계확률
+경계가_범위에_있음 = (
+    np.nanmin(경계값) <= 0.5 <= np.nanmax(경계값)
+)
+
+if 경계가_범위에_있음:
+    st.success("확률 0.5 경계가 현재 그림 범위 안에 있습니다.")
+else:
+    st.warning(
+        "확률 0.5 경계선이 현재 그림 범위 안에 나타나지 않습니다. "
+        "학습 결과에 따라 경계선이 그림 밖에 있을 수 있습니다."
+    )
+
+st.subheader("6. 두 축 질문형 모델의 질문 순서")
+
+st.code(
+    export_text(
+        두축질문모델,
+        feature_names=[속성뜻[x축], 속성뜻[y축]],
+        decimals=3,
+    ),
+    language="text",
+)
+
+st.caption(
+    "그림의 옅은 영역은 두 축만으로 학습한 질문형 모델의 분류 영역입니다. "
+    "검은 선은 두 축만으로 다시 학습한 로지스틱 회귀 모델이 "
+    "뇌졸중 확률 0.5를 기준으로 나누는 경계입니다. "
+    "색칠된 영역과 경계선은 교육용 시각화이며 실제 진단에 사용할 수 없습니다."
+)
