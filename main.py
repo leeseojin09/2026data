@@ -1,133 +1,55 @@
 
-# main.py — 뇌졸중 예측 실습실
-import pandas as pd
+# main.py
+# 뇌졸중 예측 실습실
+
 import streamlit as st
 
 st.set_page_config(
     page_title="뇌졸중 예측 실습실",
     page_icon="🩺",
     layout="wide",
-    initial_sidebar_state="expanded",
 )
 
-데이터주소 = "https://raw.githubusercontent.com/greatsong/modudata/main/data/stroke.csv"
+st.title("🩺 뇌졸중 예측 실습실")
 
+st.markdown("""
+이 실습실에서는 뇌졸중 데이터를 탐색하고,
+분류 모델을 만들고, 평가 결과를 비교하며,
+전처리가 모델에 미치는 영향을 확인할 수 있습니다.
 
-@st.cache_data
-def 데이터_읽기():
-    return pd.read_csv(데이터주소, encoding="utf-8")
+마지막으로 **내가 만든 모델 소개** 페이지에서
+분석 결과와 자신의 판단을 정리할 수 있습니다.
+""")
 
+st.divider()
+st.subheader("📚 실습 순서")
 
-def 홈화면():
-    st.title("🩺 뇌졸중 예측 실습실")
-    st.write(
-        "건강 기록을 읽어 옵니다. 왼쪽 메뉴에서 데이터 탐색, "
-        "분류 모델, 채점표, 전처리를 선택하세요."
-    )
+st.markdown("""
+1. **탐색** — 데이터의 구성과 특징 확인하기
+2. **분류 모델** — 뇌졸중 예측 모델 만들기
+3. **채점표** — 모델의 예측 결과와 평가 지표 확인하기
+4. **전처리** — 데이터를 수정한 뒤 결과 비교하기
+5. **내가 만든 모델 소개** — 분석 과정과 판단을 한 장으로 정리하기
+""")
 
-    df = 데이터_읽기()
-
-    st.subheader("한눈에 보기")
-    칸1, 칸2, 칸3, 칸4 = st.columns(4)
-    칸1.metric("전체 사람 수", f"{len(df):,}명")
-    칸2.metric("열 개수", f"{df.shape[1]}개")
-    칸3.metric("뇌졸중을 겪은 사람", f"{int(df['stroke'].sum()):,}명")
-    칸4.metric("그 비율", f"{df['stroke'].mean() * 100:.2f}%")
-
-    st.subheader("열마다 무엇이 들어 있는가")
-    st.caption(
-        "우리말 뜻 칸은 비어 있습니다. 교재의 열 대응표를 보고 "
-        "직접 입력하세요. 입력한 내용은 영구 저장되지 않습니다."
-    )
-
-    def 값의_종류(열):
-        칸 = df[열].dropna()
-        if pd.api.types.is_numeric_dtype(칸) and 칸.nunique() > 2:
-            return f"숫자 {칸.min():g} ~ {칸.max():g}"
-        값들 = sorted(칸.unique().astype(str))
-        return f"{len(값들)}가지 · " + " · ".join(값들)
-
-    열설명 = pd.DataFrame({
-        "열 이름": df.columns,
-        "우리말 뜻": [""] * df.shape[1],
-        "값의 종류": [값의_종류(열) for 열 in df.columns],
-        "빈 값 개수": [int(df[열].isna().sum()) for 열 in df.columns],
-    })
-
-    st.data_editor(
-        열설명,
-        width="stretch",
-        hide_index=True,
-        disabled=["열 이름", "값의 종류", "빈 값 개수"],
-        key="열설명표",
-    )
-
-    st.subheader("앞 다섯 줄 그대로 보기")
-    st.dataframe(df.head(5), width="stretch", hide_index=True)
-
-    st.subheader("이 데이터는 어디서 왔는가")
-    출처_기본값 = """출처: 캐글 Stroke Prediction Dataset (게시자 fedesoriano, 2021-01-26 공개)
-원본 주소: https://www.kaggle.com/datasets/fedesoriano/stroke-prediction-dataset
-라이선스: Data files © Original Authors
-게시자가 적은 문구: (Confidential Source) - Use only for educational purposes
-이 수업에서는 교육 목적으로만 사용합니다."""
-
-    st.text_area(
-        "교재를 보고 여기에 적습니다",
-        value=출처_기본값,
-        height=170,
-        key="출처",
-    )
-
-    st.caption(
-        "데이터 게시자는 원본 데이터의 출처를 명확히 밝히지 않았으며, "
-        "교육 목적으로만 사용하라고 적어 두었습니다. "
-        "이 데이터로 얻은 결과를 실제 의학적 판단에 사용해서는 안 됩니다."
-    )
-
-
-홈페이지 = st.Page(
-    홈화면,
-    title="홈",
-    icon="🏠",
-    default=True,
+st.info(
+    "왼쪽 사이드바에서 원하는 실습 페이지를 선택하세요. "
+    "페이지가 보이지 않는다면 GitHub의 pages 폴더에 파일이 있는지 확인하세요."
 )
 
-탐색페이지 = st.Page(
-    "pages/1_탐색.py",
-    title="데이터 탐색",
-    icon="🔎",
-)
+st.subheader("🗂️ 페이지 구성")
 
-분류모델페이지 = st.Page(
-    "pages/2_분류_모델.py",
-    title="분류 모델",
-    icon="🌳",
-)
+페이지 = [
+    ("1_탐색.py", "데이터를 살펴보고 속성의 의미를 확인합니다."),
+    ("2_분류_모델.py", "선택한 속성으로 분류 모델을 만듭니다."),
+    ("3_채점표.py", "예측 결과와 정확도·재현율·F1 등을 확인합니다."),
+    ("4_전처리.py", "전처리 전후의 모델 성능을 비교합니다."),
+    ("5_내가_만든_모델_소개.py", "글과 평가 수치를 직접 입력해 결과를 정리합니다."),
+]
 
-채점표페이지 = st.Page(
-    "pages/3_채점표.py",
-    title="채점표",
-    icon="📋",
-)
+for 파일명, 설명 in 페이지:
+    st.markdown(f"- **{파일명}** — {설명}")
 
-전처리페이지 = st.Page(
-    "pages/4_전처리.py",
-    title="전처리",
-    icon="🧹",
+st.caption(
+    "이 페이지는 시작 화면입니다. 실제 실습은 왼쪽 사이드바의 각 페이지에서 진행하세요."
 )
-
-페이지 = st.navigation(
-    {
-        "뇌졸중 예측 실습실": [
-            홈페이지,
-            탐색페이지,
-            분류모델페이지,
-            채점표페이지,
-            전처리페이지,
-        ]
-    },
-    position="sidebar",
-)
-
-페이지.run()
