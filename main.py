@@ -102,9 +102,15 @@ def 홈화면():
 )
 
 분류모델페이지 = st.Page(
-    "pages/2_분류_모델.py.",
+    "pages/2_분류_모델.py",
     title="분류 모델",
     icon="🌳",
+)
+
+채점표페이지 = st.Page(
+    "pages/3_채점표.py",
+    title="채점표",
+    icon="📋",
 )
 
 페이지 = st.navigation(
@@ -113,6 +119,7 @@ def 홈화면():
             홈페이지,
             탐색페이지,
             분류모델페이지,
+            채점표페이지,
         ]
     },
     position="sidebar",
