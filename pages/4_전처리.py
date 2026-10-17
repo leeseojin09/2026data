@@ -1,842 +1,255 @@
-
-# pages/4_전처리.py — 뇌졸중 예측 실습실 전처리 비교
-import numpy as np
+# pages/4_전처리.py — 두 가지를 고쳐 보고 전후를 나란히 놓고 채점한 뒤, 경계선이 어떻게 움직였는지 본다
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-
-from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 
-st.set_page_config(
-    page_title="뇌졸중 예측 실습실",
-    page_icon="🩺",
-    layout="wide",
-)
+st.set_page_config(page_title="전처리", page_icon="🛠️", layout="wide")
+st.title("🛠️ 전처리")
+st.write("데이터를 손보고 다시 학습해, 고치기 전과 고친 뒤의 네 지표를 나란히 놓고 봅니다.")
 
-st.title("🧹 전처리 전후 비교 실험실")
-st.write(
-    "최대 1,000명을 채점용 데이터로 고정하고 나머지 자료로 모델을 학습합니다. "
-    "클래스 균형 조정과 BMI 결측값 처리에 따라 예측 결과가 어떻게 달라지는지 비교합니다."
-)
-
-DATA_URL = (
-    "https://raw.githubusercontent.com/"
-    "greatsong/modudata/main/data/stroke.csv"
-)
-
-속성목록 = [
-    "age",
-    "avg_glucose_level",
-    "bmi",
-    "hypertension",
-    "heart_disease",
-]
-
-속성뜻 = {
-    "age": "나이",
-    "avg_glucose_level": "평균 혈당",
-    "bmi": "체질량지수(BMI)",
-    "hypertension": "고혈압 여부",
-    "heart_disease": "심장병 여부",
-}
+데이터주소 = "https://raw.githubusercontent.com/greatsong/modudata/main/data/stroke.csv"
+고를수있는열 = ["age", "avg_glucose_level", "bmi", "hypertension", "heart_disease"]
+기본열 = ["age", "avg_glucose_level", "hypertension", "heart_disease"]
+입력이름 = {"age": "나이", "avg_glucose_level": "평균 혈당", "bmi": "체질량지수",
+            "hypertension": "고혈압", "heart_disease": "심장병"}
+전이름, 후이름 = "고치기 전 (무게 그대로)", "고친 뒤 (무게를 같게)"
+칸수 = 60
+칸수3D = 26
 
 
 @st.cache_data
 def 데이터_읽기():
-    return pd.read_csv(DATA_URL, encoding="utf-8")
+    return pd.read_csv(데이터주소, encoding="utf-8")
 
 
-try:
-    df = 데이터_읽기()
-except Exception as e:
-    st.error(f"데이터를 불러오지 못했습니다: {e}")
+def 우리말(열):
+    return 입력이름[열]
+
+
+원본 = 데이터_읽기()
+
+무게맞추기 = st.toggle("양쪽의 무게를 같게 맞추기", value=True,
+                       help="뇌졸중을 겪은 사람이 아주 드무니, 학습할 때 양쪽의 무게를 같게 맞춥니다.")
+결측처리 = st.radio("bmi가 비어 있는 사람을 어떻게 할까요",
+                    ["그대로 둔다", "지운다"], horizontal=True)
+고른열 = st.multiselect("입력으로 사용할 속성", 고를수있는열, default=기본열, format_func=우리말,
+                        help="처음에는 나이·평균 혈당·고혈압·심장병 네 가지가 골라져 있습니다.")
+입력열 = [열 for 열 in 고를수있는열 if 열 in 고른열]   # 고른 차례와 상관없이 늘 같은 순서로 둔다
+if len(입력열) < 2:
+    st.warning("속성을 두 개 이상 골라 주세요. 하나만으로는 그림의 두 축을 만들 수 없습니다.")
     st.stop()
 
-필수열 = set(속성목록 + ["stroke"])
+df = 원본 if 결측처리 == "그대로 둔다" else 원본.dropna(subset=["bmi"])
+df = df.sort_values("id").reset_index(drop=True)        # '채점표' 페이지와 같은 방법으로 나눈다
+채점용 = pd.Series(df.index % 10 < 3, index=df.index)
+X = df[입력열].copy()
+y = df["stroke"]
+실제 = y[채점용].to_numpy()
+
+if "bmi" in 입력열 and X["bmi"].isna().any():
+    빈칸수 = int(X["bmi"].isna().sum())
+    중앙값 = float(X.loc[~채점용, "bmi"].median())
+    X["bmi"] = X["bmi"].fillna(중앙값)
+    st.warning(f"체질량지수가 비어 있는 {빈칸수:,}명은 훈련용의 중앙값 {중앙값:.1f}으로 채웠습니다.")
+
+st.info(f"사용하는 사람은 {len(df):,}명이고 그중 뇌졸중은 {int(y.sum()):,}명입니다 · "
+        f"채점용 {len(실제):,}명 가운데 실제 뇌졸중은 {int(실제.sum()):,}명입니다.")
+if 결측처리 == "지운다":
+    st.warning(f"비어 있던 {len(원본) - len(df):,}명을 지웠습니다. "
+               f"그 안에 뇌졸중 환자가 {int(원본['stroke'].sum() - y.sum()):,}명 들어 있었습니다.")
+
+
+def 학습(무게):
+    """무게를 맞출지 정해 두 모델을 학습해 돌려준다."""
+    맞춤 = "balanced" if 무게 else None
+    크기맞추기 = StandardScaler().fit(X[~채점용])
+    확률모델 = LogisticRegression(max_iter=2000, class_weight=맞춤).fit(
+        크기맞추기.transform(X[~채점용]), y[~채점용])
+    질문모델 = DecisionTreeClassifier(max_depth=3, min_samples_leaf=5, random_state=0,
+                                      class_weight=맞춤).fit(X[~채점용], y[~채점용])
+    return 크기맞추기, 확률모델, 질문모델
+
+
+모델 = {전이름: 학습(False), 후이름: 학습(True)}
+예측 = {}
+for 상태, (크기맞추기, 확률모델, 질문모델) in 모델.items():
+    예측[상태] = {"확률로 답하는 모델": 확률모델.predict(크기맞추기.transform(X[채점용])),
+                  "질문으로 답하는 모델": 질문모델.predict(X[채점용])}
+
+
+def 네칸(예측값):
+    TP = int(((실제 == 1) & (예측값 == 1)).sum())
+    FN = int(((실제 == 1) & (예측값 == 0)).sum())
+    FP = int(((실제 == 0) & (예측값 == 1)).sum())
+    TN = int(((실제 == 0) & (예측값 == 0)).sum())
+    return TP, FN, FP, TN
+
+
+def 지표(TP, FN, FP, TN):
+    정확도 = (TP + TN) / (TP + FN + FP + TN)
+    정밀도 = TP / (TP + FP) if (TP + FP) > 0 else None
+    재현율 = TP / (TP + FN) if (TP + FN) > 0 else None
+    F1_분모 = 2 * TP + FP + FN
+    F1 = 2 * TP / F1_분모 if F1_분모 > 0 else None   # 정밀도를 구할 수 없어도 값이 나온다
+    return 정확도, 정밀도, 재현율, F1
+
+
+def 소수(값):
+    return "계산할 수 없음" if 값 is None else f"{값:.4f}"
+
+
+st.subheader("고치기 전과 고친 뒤")
+for 모델이름 in ("확률로 답하는 모델", "질문으로 답하는 모델"):
+    st.markdown(f"**{모델이름}**")
+    칸 = {}
+    for 상태 in 예측:
+        TP, FN, FP, TN = 네칸(예측[상태][모델이름])
+        정확도, 정밀도, 재현율, F1 = 지표(TP, FN, FP, TN)
+        칸[상태] = [f"{TP}명", f"{FP}명", f"{FN}명", f"{TN:,}명",
+                    소수(정확도), 소수(정밀도), 소수(재현율), 소수(F1)]
+    비교표 = pd.DataFrame(칸, index=["TP (찾아낸 환자)", "FP (헛짚은 사람)", "FN (놓친 환자)", "TN",
+                                     "정확도", "정밀도", "재현율", "F1"])
+    비교표.index.name = ""
+    st.table(비교표)
+    전 = 네칸(예측[전이름][모델이름])
+    후 = 네칸(예측[후이름][모델이름])
+    st.caption(f"찾아낸 환자 {전[0]}명 → {후[0]}명 · 놓친 환자 {전[1]}명 → {후[1]}명 · "
+               f"헛짚은 사람 {전[2]}명 → {후[2]}명")
+
+st.subheader("무게를 맞추자 경계선이 어디로 움직였는가")
+축칸 = st.columns(2)
+가로 = 축칸[0].selectbox("가로축", 입력열, index=0, format_func=우리말)
+세로후보 = [열 for 열 in 입력열 if 열 != 가로]
+세로 = 축칸[1].selectbox("세로축", 세로후보, index=0, format_func=우리말)
+
+채점입력 = X[채점용]
+고정값 = {열: float(채점입력[열].median()) for 열 in 입력열 if 열 not in (가로, 세로)}
+색깔 = {전이름: "#2563eb", 후이름: "#dc2626"}
+
+
+def 눈금(열, 개수):
+    """채점용에서의 가장 작은 값부터 가장 큰 값까지 고르게 나눈 값들을 돌려준다."""
+    작은값, 큰값 = float(채점입력[열].min()), float(채점입력[열].max())
+    if 큰값 <= 작은값:
+        큰값 = 작은값 + 1.0
+    폭 = (큰값 - 작은값) / (개수 - 1)
+    return [작은값 + 폭 * i for i in range(개수)]
+
+
+def 두줄로(값들, 개수):
+    """한 줄로 늘어선 값을 세로줄마다 잘라 표 모양으로 만든다."""
+    return [값들[i * 개수:(i + 1) * 개수] for i in range(개수)]
+
 
-if not 필수열.issubset(df.columns):
-    st.error("데이터에 필요한 열이 없습니다.")
-    st.stop()
-
-# 데이터 번호 순으로 정렬
-if "id" in df.columns:
-    df = df.sort_values("id", kind="stable").reset_index(drop=True)
-else:
-    df = df.reset_index(drop=True)
-
-df["stroke"] = pd.to_numeric(df["stroke"], errors="coerce")
-df = df[df["stroke"].isin([0, 1])].reset_index(drop=True)
-
-if len(df) < 2:
-    st.error("학습용 데이터와 채점용 데이터를 나눌 자료가 부족합니다.")
-    st.stop()
-
-# 앞 1,000명은 채점용, 나머지는 학습용
-채점용_인원 = min(1000, len(df) - 1)
-
-test_original = df.iloc[:채점용_인원].copy()
-train_original = df.iloc[채점용_인원:].copy()
-
-# --------------------------------------------------
-# 1. 전처리 설정
-# --------------------------------------------------
-st.subheader("1. 전처리 설정")
-
-설정1, 설정2 = st.columns(2)
-
-with 설정1:
-    균형조정 = st.toggle(
-        "클래스 무게 조정 켜기",
-        value=False,
-        help=(
-            "켜면 두 모델의 전처리 후 버전에 "
-            "class_weight='balanced'를 적용합니다. "
-            "데이터 행 자체를 늘리거나 줄이는 방법은 아닙니다."
-        ),
-    )
-
-with 설정2:
-    BMI처리 = st.radio(
-        "BMI 결측값 처리 방법",
-        options=["그대로 두기", "삭제하기"],
-        horizontal=True,
-        help=(
-            "삭제하기를 선택하면 BMI가 비어 있는 행을 "
-            "학습용과 채점용에서 각각 제거합니다."
-        ),
-    )
-
-선택속성 = st.multiselect(
-    "모델에 사용할 입력 속성을 선택하세요.",
-    options=속성목록,
-    default=[
-        "age",
-        "avg_glucose_level",
-        "hypertension",
-        "heart_disease",
-    ],
-    format_func=lambda x: f"{x} — {속성뜻[x]}",
-    key="전처리_속성선택",
-)
-
-if len(선택속성) < 2:
-    st.warning("입력 속성을 두 개 이상 선택해 주세요.")
-    st.stop()
-
-# BMI 결측값 삭제 전 개수 기록
-BMI결측_학습 = int(train_original["bmi"].isna().sum())
-BMI결측_채점 = int(test_original["bmi"].isna().sum())
-
-삭제된_뇌졸중인원 = 0
-삭제된_전체인원 = 0
-
-train_df = train_original.copy()
-test_df = test_original.copy()
-
-# BMI 삭제 설정은 입력 속성에 BMI가 선택되지 않았더라도 적용
-if BMI처리 == "삭제하기":
-    삭제대상_학습 = train_df["bmi"].isna()
-    삭제대상_채점 = test_df["bmi"].isna()
-
-    삭제된_전체인원 = int(
-        삭제대상_학습.sum() + 삭제대상_채점.sum()
-    )
-
-    삭제된_뇌졸중인원 = int(
-        train_df.loc[삭제대상_학습, "stroke"].sum()
-        + test_df.loc[삭제대상_채점, "stroke"].sum()
-    )
-
-    train_df = train_df.loc[~삭제대상_학습].copy()
-    test_df = test_df.loc[~삭제대상_채점].copy()
-
-st.subheader("2. 데이터 전처리 결과")
-
-m1, m2, m3, m4 = st.columns(4)
-
-with m1:
-    st.metric("원본 전체 데이터", f"{len(df):,}명")
-
-with m2:
-    st.metric("채점용 원본", f"{len(test_original):,}명")
-
-with m3:
-    st.metric("학습용 원본", f"{len(train_original):,}명")
-
-with m4:
-    st.metric("BMI 결측 행 삭제", f"{삭제된_전체인원:,}명")
-
-if BMI처리 == "삭제하기":
-    st.info(
-        f"BMI 결측 행을 삭제했습니다. "
-        f"삭제된 행은 총 {삭제된_전체인원:,}명이며, "
-        f"그중 실제 뇌졸중(stroke=1)인 사람은 "
-        f"{삭제된_뇌졸중인원:,}명입니다. "
-        f"최종 채점용은 {len(test_df):,}명, "
-        f"학습용은 {len(train_df):,}명입니다."
-    )
-else:
-    st.info(
-        "BMI 결측 행을 유지합니다. "
-        "모델 학습 시 선택한 입력 속성의 결측값은 "
-        "학습용 데이터에서 계산한 중앙값으로 대체합니다."
-    )
-
-if len(train_df) == 0 or len(test_df) == 0:
-    st.error("전처리 후 학습용 또는 채점용 데이터가 없습니다.")
-    st.stop()
-
-st.caption(
-    "데이터 번호 순으로 앞 최대 1,000명을 채점용으로 고정했습니다. "
-    "나머지는 학습용입니다. BMI 결측 행 삭제를 선택하면 "
-    "실제 채점 인원이 1,000명보다 적어질 수 있습니다."
-)
-
-# --------------------------------------------------
-# 3. 입력 데이터 구성
-# --------------------------------------------------
-X_train_raw = train_df[선택속성].apply(
-    pd.to_numeric, errors="coerce"
-)
-
-X_test_raw = test_df[선택속성].apply(
-    pd.to_numeric, errors="coerce"
-)
-
-y_train = train_df["stroke"].astype(int)
-y_test = test_df["stroke"].astype(int)
-
-if y_train.nunique() < 2:
-    st.error(
-        "학습용 데이터에 stroke=0과 stroke=1이 모두 있어야 합니다."
-    )
-    st.stop()
-
-if y_test.nunique() < 2:
-    st.warning(
-        "채점용 데이터에 실제 뇌졸중 여부 한 종류만 있습니다. "
-        "일부 평가 지표가 계산되지 않거나 0으로 표시될 수 있습니다."
-    )
-
-# 결측값 대체 기준은 학습용에서만 계산
-중앙값채우기 = SimpleImputer(strategy="median")
-
-X_train = pd.DataFrame(
-    중앙값채우기.fit_transform(X_train_raw),
-    columns=선택속성,
-    index=train_df.index,
-)
-
-X_test = pd.DataFrame(
-    중앙값채우기.transform(X_test_raw),
-    columns=선택속성,
-    index=test_df.index,
-)
-
-# --------------------------------------------------
-# 4. 모델 학습 및 예측
-# --------------------------------------------------
-def 모델학습_예측(class_weight):
-    """같은 학습/채점 데이터에서 두 모델을 학습하고 결과를 반환한다."""
-
-    확률모델 = Pipeline([
-        ("표준화", StandardScaler()),
-        (
-            "분류",
-            LogisticRegression(
-                max_iter=2000,
-                random_state=42,
-                class_weight=class_weight,
-            ),
-        ),
-    ])
-
-    확률모델.fit(X_train, y_train)
-
-    확률클래스 = list(
-        확률모델.named_steps["분류"].classes_
-    )
-
-    확률값 = 확률모델.predict_proba(X_test)[
-        :, 확률클래스.index(1)
-    ]
-
-    확률분류 = (확률값 >= 0.5).astype(int)
-
-    질문모델 = DecisionTreeClassifier(
-        max_depth=3,
-        min_samples_leaf=5,
-        random_state=42,
-        class_weight=class_weight,
-    )
-
-    질문모델.fit(X_train, y_train)
-    질문분류 = 질문모델.predict(X_test).astype(int)
-
-    return {
-        "확률 모델": {
-            "model": 확률모델,
-            "probability": 확률값,
-            "prediction": 확률분류,
-        },
-        "질문형 모델": {
-            "model": 질문모델,
-            "probability": None,
-            "prediction": 질문분류,
-        },
-    }
-
-
-# 전처리 전 모델은 균형 조정 미적용
-전처리전 = 모델학습_예측(None)
-
-# 전처리 후 모델은 토글 설정을 적용
-전처리후 = 모델학습_예측(
-    "balanced" if 균형조정 else None
-)
-
-# --------------------------------------------------
-# 5. 혼동행렬과 지표
-# --------------------------------------------------
-def 혼동수(실제, 예측):
-    실제 = np.asarray(실제, dtype=int)
-    예측 = np.asarray(예측, dtype=int)
-
-    tn = int(((실제 == 0) & (예측 == 0)).sum())
-    fp = int(((실제 == 0) & (예측 == 1)).sum())
-    fn = int(((실제 == 1) & (예측 == 0)).sum())
-    tp = int(((실제 == 1) & (예측 == 1)).sum())
-
-    return {"TP": tp, "FP": fp, "FN": fn, "TN": tn}
-
-
-def 지표계산(혼동):
-    tp = 혼동["TP"]
-    fp = 혼동["FP"]
-    fn = 혼동["FN"]
-    tn = 혼동["TN"]
-
-    전체 = tp + fp + fn + tn
-    정확도 = (tp + tn) / 전체 if 전체 else 0.0
-
-    정밀도 = (
-        tp / (tp + fp)
-        if tp + fp > 0
-        else None
-    )
-
-    재현율 = (
-        tp / (tp + fn)
-        if tp + fn > 0
-        else None
-    )
-
-    f1분모 = 2 * tp + fp + fn
-    f1 = 2 * tp / f1분모 if f1분모 > 0 else 0.0
-
-    return {
-        "정확도": 정확도,
-        "정밀도": 정밀도,
-        "재현율": 재현율,
-        "F1": f1,
-    }
-
-
-def 백분율(값):
-    return "계산할 수 없음" if 값 is None else f"{값 * 100:.2f}%"
-
-
-def 혼동행렬표(혼동):
-    tp = 혼동["TP"]
-    fp = 혼동["FP"]
-    fn = 혼동["FN"]
-    tn = 혼동["TN"]
-
-    return pd.DataFrame(
-        [
-            [f"TN = {tn}명", f"FP = {fp}명"],
-            [f"FN = {fn}명", f"TP = {tp}명"],
-        ],
-        index=[
-            "실제 0 · 뇌졸중 아님",
-            "실제 1 · 뇌졸중",
-        ],
-        columns=[
-            "예측 0 · 뇌졸중 아님",
-            "예측 1 · 뇌졸중",
-        ],
-    )
-
-
-혼동_전 = {}
-혼동_후 = {}
-지표_전 = {}
-지표_후 = {}
-
-for 이름 in ["확률 모델", "질문형 모델"]:
-    혼동_전[이름] = 혼동수(
-        y_test.to_numpy(),
-        전처리전[이름]["prediction"],
-    )
-
-    혼동_후[이름] = 혼동수(
-        y_test.to_numpy(),
-        전처리후[이름]["prediction"],
-    )
-
-    지표_전[이름] = 지표계산(혼동_전[이름])
-    지표_후[이름] = 지표계산(혼동_후[이름])
-
-# --------------------------------------------------
-# 6. 전처리 전후 혼동행렬
-# --------------------------------------------------
-st.subheader("3. 전처리 전후 혼동행렬 비교")
-
-st.caption(
-    "전처리 전과 후 모두 같은 채점용 원본을 기준으로 비교합니다. "
-    "BMI 결측 삭제를 선택하면 결측 BMI 행은 양쪽 비교에서 제외됩니다."
-)
-
-for 이름 in ["확률 모델", "질문형 모델"]:
-    st.markdown(f"### {이름}")
-
-    왼쪽, 오른쪽 = st.columns(2)
-
-    with 왼쪽:
-        st.markdown("#### 전처리 전")
-        st.dataframe(
-            혼동행렬표(혼동_전[이름]),
-            use_container_width=True,
-        )
-
-    with 오른쪽:
-        st.markdown("#### 전처리 후")
-        st.dataframe(
-            혼동행렬표(혼동_후[이름]),
-            use_container_width=True,
-        )
-
-# --------------------------------------------------
-# 7. 정확도, 정밀도, 재현율, F1
-# --------------------------------------------------
-st.subheader("4. 분류 지표 비교")
-
-비교자료 = []
-
-for 이름 in ["확률 모델", "질문형 모델"]:
-    for 구분, 지표 in [
-        ("전처리 전", 지표_전[이름]),
-        ("전처리 후", 지표_후[이름]),
-    ]:
-        비교자료.append({
-            "모델": 이름,
-            "구분": 구분,
-            "정확도": 백분율(지표["정확도"]),
-            "정밀도": 백분율(지표["정밀도"]),
-            "재현율": 백분율(지표["재현율"]),
-            "F1": 백분율(지표["F1"]),
-        })
-
-st.dataframe(
-    pd.DataFrame(비교자료),
-    use_container_width=True,
-    hide_index=True,
-)
-
-st.caption(
-    "정밀도 = TP / (TP + FP), 재현율 = TP / (TP + FN), "
-    "F1 = 2TP / (2TP + FP + FN)입니다."
-)
-
-# --------------------------------------------------
-# 8. TP, FN, FP 변화
-# --------------------------------------------------
-st.subheader("5. 전처리 전후 예측 인원 변화")
-
-변화자료 = []
-
-for 이름 in ["확률 모델", "질문형 모델"]:
-    전 = 혼동_전[이름]
-    후 = 혼동_후[이름]
-
-    변화자료.append({
-        "모델": 이름,
-        "구분": "전처리 전 → 후",
-        "맞게 찾은 뇌졸중 환자(TP)": (
-            f"{전['TP']:,}명 → {후['TP']:,}명"
-        ),
-        "놓친 환자(FN)": (
-            f"{전['FN']:,}명 → {후['FN']:,}명"
-        ),
-        "헛짚은 사람(FP)": (
-            f"{전['FP']:,}명 → {후['FP']:,}명"
-        ),
-        "TP 변화": 후["TP"] - 전["TP"],
-        "FN 변화": 후["FN"] - 전["FN"],
-        "FP 변화": 후["FP"] - 전["FP"],
-    })
-
-st.dataframe(
-    pd.DataFrame(변화자료),
-    use_container_width=True,
-    hide_index=True,
-)
-
-# --------------------------------------------------
-# 9. 그래프용 속성 선택
-# --------------------------------------------------
-st.subheader("6. Plotly 결정 경계 시각화")
-
-st.write(
-    "두 속성을 선택하면 2차원 그래프에서 0.5 결정 경계를 비교합니다. "
-    "세 속성 이상을 선택하면 세 속성을 이용한 회전 가능한 3차원 그래프를 표시합니다."
-)
-
-if len(선택속성) == 2:
-    x축 = 선택속성[0]
-    y축 = 선택속성[1]
-    z축 = None
-else:
-    g1, g2, g3 = st.columns(3)
-
-    with g1:
-        x축 = st.selectbox(
-            "X축 속성",
-            선택속성,
-            index=0,
-            key="전처리_x축",
-        )
-
-    나머지_y = [x for x in 선택속성 if x != x축]
-
-    with g2:
-        y축 = st.selectbox(
-            "Y축 속성",
-            나머지_y,
-            index=0,
-            key="전처리_y축",
-        )
-
-    나머지_z = [x for x in 선택속성 if x not in [x축, y축]]
-
-    with g3:
-        z축 = st.selectbox(
-            "Z축 속성",
-            나머지_z,
-            index=0,
-            key="전처리_z축",
-        )
-
-# 색상은 실제 정답에 따라 구분
-색상_실제 = np.where(y_test.to_numpy() == 1, "red", "blue")
-
-# --------------------------------------------------
-# 10. 2차원 결정 경계
-# --------------------------------------------------
-if len(선택속성) == 2:
-    st.markdown("#### 2차원 산점도와 0.5 결정 경계")
-
-    x값 = X_test[x축].to_numpy()
-    y값 = X_test[y축].to_numpy()
-
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Scatter(
-            x=x값[y_test.to_numpy() == 0],
-            y=y값[y_test.to_numpy() == 0],
-            mode="markers",
-            name="실제 뇌졸중 아님",
-            marker=dict(color="blue", size=7, opacity=0.65),
-        )
-    )
-
-    fig.add_trace(
-        go.Scatter(
-            x=x값[y_test.to_numpy() == 1],
-            y=y값[y_test.to_numpy() == 1],
-            mode="markers",
-            name="실제 뇌졸중",
-            marker=dict(color="red", size=8, opacity=0.8),
-        )
-    )
-
-    x_min, x_max = float(X_train[x축].min()), float(X_train[x축].max())
-    y_min, y_max = float(X_train[y축].min()), float(X_train[y축].max())
-
-    if x_min == x_max:
-        x_min -= 1
-        x_max += 1
-
-    if y_min == y_max:
-        y_min -= 1
-        y_max += 1
-
-    x_grid = np.linspace(x_min, x_max, 100)
-    y_grid = np.linspace(y_min, y_max, 100)
-    xx, yy = np.meshgrid(x_grid, y_grid)
-
-    그리드자료 = pd.DataFrame(
-        np.tile(X_train.median().to_numpy(), (xx.size, 1)),
-        columns=선택속성,
-    )
-
-    그리드자료[x축] = xx.ravel()
-    그리드자료[y축] = yy.ravel()
-
-    경계_정보 = []
-
-    for 구분, 결과, 선색, 선모양 in [
-        ("전처리 전", 전처리전, "green", "solid"),
-        ("전처리 후", 전처리후, "orange", "dash"),
-    ]:
-        모델 = 결과["확률 모델"]["model"]
-        클래스 = list(모델.named_steps["분류"].classes_)
-
-        확률 = 모델.predict_proba(그리드자료)[
-            :, 클래스.index(1)
-        ].reshape(xx.shape)
-
-        최소확률 = float(np.nanmin(확률))
-        최대확률 = float(np.nanmax(확률))
-
-        경계_정보.append(
-            (구분, 최소확률, 최대확률)
-        )
-
-        fig.add_trace(
-            go.Contour(
-                x=x_grid,
-                y=y_grid,
-                z=확률,
-                contours=dict(
-                    start=0.5,
-                    end=0.5,
-                    size=1,
-                    coloring="none",
-                    showlabels=False,
-                ),
-                line=dict(color=선색, width=3, dash=선모양),
-                name=f"{구분} 0.5 경계",
-                showscale=False,
-                hovertemplate=(
-                    f"{구분}<br>"
-                    + x축 + ": %{x:.2f}<br>"
-                    + y축 + ": %{y:.2f}<extra></extra>"
-                ),
-            )
-        )
-
-    fig.update_layout(
-        xaxis_title=f"{x축} ({속성뜻[x축]})",
-        yaxis_title=f"{y축} ({속성뜻[y축]})",
-        height=650,
-        legend_title="범례",
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    for 구분, 최소확률, 최대확률 in 경계_정보:
-        if 최소확률 > 0.5 or 최대확률 < 0.5:
-            st.info(
-                f"{구분}: 현재 그래프 범위 안에 0.5 결정 경계가 "
-                "없을 수 있습니다. 경계가 표시되지 않는 것은 "
-                "해당 범위에서 예측 확률이 모두 0.5보다 높거나 낮기 때문입니다."
-            )
-
-# --------------------------------------------------
-# 11. 3차원 산점도 및 결정 평면
-# --------------------------------------------------
-else:
-    st.markdown("#### 3차원 산점도와 결정 평면")
-
-    fig3 = go.Figure()
-
-    for 실제값, 이름, 색 in [
-        (0, "실제 뇌졸중 아님", "blue"),
-        (1, "실제 뇌졸중", "red"),
-    ]:
-        마스크 = y_test.to_numpy() == 실제값
-
-        fig3.add_trace(
-            go.Scatter3d(
-                x=X_test.loc[마스크, x축],
-                y=X_test.loc[마스크, y축],
-                z=X_test.loc[마스크, z축],
-                mode="markers",
-                name=이름,
-                marker=dict(size=4, color=색, opacity=0.7),
-            )
-        )
-
-    축범위 = {}
-    for 축 in [x축, y축, z축]:
-        최소 = float(X_train[축].min())
-        최대 = float(X_train[축].max())
-
-        if 최소 == 최대:
-            최소 -= 1
-            최대 += 1
-
-        축범위[축] = (최소, 최대)
-
-    gx = np.linspace(*축범위[x축], 35)
-    gy = np.linspace(*축범위[y축], 35)
-    xx3, yy3 = np.meshgrid(gx, gy)
-
-    for 구분, 결과, 색 in [
-        ("전처리 전 0.5 평면", 전처리전, "green"),
-        ("전처리 후 0.5 평면", 전처리후, "orange"),
-    ]:
-        모델 = 결과["확률 모델"]["model"]
-        로지스틱 = 모델.named_steps["분류"]
-        표준화 = 모델.named_steps["표준화"]
-
-        클래스 = list(로지스틱.classes_)
-        양성위치 = 클래스.index(1)
-
-        계수_표준화 = 로지스틱.coef_[양성위치]
-        절편_표준화 = 로지스틱.intercept_[양성위치]
-
-        계수_원본 = 계수_표준화 / 표준화.scale_
-        절편_원본 = (
-            절편_표준화
-            - np.sum(
-                계수_표준화
-                * 표준화.mean_
-                / 표준화.scale_
-            )
-        )
-
-        계수 = dict(zip(선택속성, 계수_원본))
-
-        분모 = 계수[z축]
-
-        if abs(분모) < 1e-10:
-            st.info(
-                f"{구분}: {속성뜻[z축]}의 계수가 0에 가까워 "
-                "이 축을 기준으로 결정 평면을 그릴 수 없습니다."
-            )
-            continue
-
-        zz3 = -(
-            계수[x축] * xx3
-            + 계수[y축] * yy3
-            + 절편_원본
-        ) / 분모
-
-        z_min, z_max = 축범위[z축]
-
-        # 현재 학습 데이터 범위 안에 있는 평면만 표시
-        zz3 = np.where(
-            (zz3 >= z_min) & (zz3 <= z_max),
-            zz3,
-            np.nan,
-        )
-
-        if not np.isfinite(zz3).any():
-            st.info(
-                f"{구분}: 결정 평면이 현재 그래프의 "
-                f"{속성뜻[z축]} 범위 밖에 있습니다."
-            )
-            continue
-
-        fig3.add_trace(
-            go.Surface(
-                x=xx3,
-                y=yy3,
-                z=zz3,
-                name=구분,
-                opacity=0.45,
-                showscale=False,
-                colorscale=[
-                    [0, 색],
-                    [1, 색],
-                ],
-                hovertemplate=(
-                    f"{구분}<br>"
-                    + x축 + ": %{x:.2f}<br>"
-                    + y축 + ": %{y:.2f}<br>"
-                    + z축 + ": %{z:.2f}<extra></extra>"
-                ),
-            )
-        )
-
-    fig3.update_layout(
-        scene=dict(
-            xaxis_title=f"{x축} ({속성뜻[x축]})",
-            yaxis_title=f"{y축} ({속성뜻[y축]})",
-            zaxis_title=f"{z축} ({속성뜻[z축]})",
-        ),
-        height=750,
-        legend_title="범례",
-    )
-
-    st.plotly_chart(fig3, use_container_width=True)
-
-# --------------------------------------------------
-# 12. 놓친 환자 목록
-# --------------------------------------------------
-st.subheader("7. 놓친 환자 목록")
-
-if 균형조정:
-    목록기준 = 전처리후
-    목록설명 = "클래스 균형 조정이 적용된 전처리 후 확률 모델"
-else:
-    목록기준 = 전처리전
-    목록설명 = "클래스 균형 조정이 적용되지 않은 전처리 전 확률 모델"
-
-목록예측 = 목록기준["확률 모델"]["prediction"]
-
-목록원본 = test_df.copy()
-목록원본["실제"] = y_test.to_numpy()
-목록원본["예측"] = 목록예측
-
-놓친환자 = 목록원본[
-    (목록원본["실제"] == 1)
-    & (목록원본["예측"] == 0)
-].copy()
-
-if "id" in 놓친환자.columns:
-    번호열 = 놓친환자["id"].to_numpy()
-else:
-    번호열 = 놓친환자.index.to_numpy() + 1
-
-놓친표 = pd.DataFrame({
-    "번호": 번호열,
-    "나이": pd.to_numeric(
-        놓친환자["age"], errors="coerce"
-    ).to_numpy(),
-    "고혈압 여부": 놓친환자["hypertension"].to_numpy(),
-    "심장병 여부": 놓친환자["heart_disease"].to_numpy(),
+가로눈금, 세로눈금 = 눈금(가로, 칸수), 눈금(세로, 칸수)
+격자 = pd.DataFrame([dict(고정값, **{가로: 가, 세로: 세}) for 세 in 세로눈금 for 가 in 가로눈금])[입력열]
+
+그림2D = go.Figure()
+밖으로나간것 = []
+for 상태 in (전이름, 후이름):
+    크기맞추기, 확률모델, _ = 모델[상태]
+    확률격자 = 확률모델.predict_proba(크기맞추기.transform(격자))[:, 1].tolist()
+    그림2D.add_trace(go.Contour(x=가로눈금, y=세로눈금, z=두줄로(확률격자, 칸수),
+                                contours=dict(coloring="lines", start=0.5, end=0.5, size=1),
+                                line=dict(width=3, color=색깔[상태]), showscale=False,
+                                hoverinfo="skip", name=f"{상태}의 0.5 경계선"))
+    if not (min(확률격자) <= 0.5 <= max(확률격자)):
+        밖으로나간것.append((상태, max(확률격자)))
+
+점표 = pd.DataFrame({
+    "가로": 채점입력[가로].to_numpy(), "세로": 채점입력[세로].to_numpy(),
+    "실제": pd.Series(실제).map({1: "뇌졸중 있음", 0: "뇌졸중 없음"}).to_numpy(),
 })
+for 이름, 색 in (("뇌졸중 없음", "#94a3b8"), ("뇌졸중 있음", "#7f1d1d")):
+    한무리 = 점표[점표["실제"] == 이름]
+    그림2D.add_trace(go.Scatter(x=한무리["가로"], y=한무리["세로"], mode="markers", name=이름,
+                                marker=dict(size=6, color=색, opacity=0.5,
+                                            line=dict(width=0.5, color="white"))))
+그림2D.update_layout(title=f"가로축 {우리말(가로)} · 세로축 {우리말(세로)} · 전후 경계선",
+                     xaxis_title=우리말(가로), yaxis_title=우리말(세로), height=560)
+st.plotly_chart(그림2D, width="stretch")
+for 상태, 가장높은확률 in 밖으로나간것:
+    st.info(f"{상태}: 이 그림 안에서 확률이 가장 높은 자리도 {가장높은확률:.2f}입니다. "
+            f"확률이 0.5를 넘는 자리가 없어 0.5 경계선이 그림 안에 없습니다.")
+고정설명 = " · ".join(f"{우리말(열)} {값:g}" for 열, 값 in 고정값.items())
+st.caption(f"파란 선은 고치기 전, 붉은 선은 고친 뒤의 0.5 경계선입니다. 점은 채점용 사람들이고 색은 실제 "
+           f"뇌졸중 여부입니다."
+           + (f" 두 축이 아닌 속성은 채점용의 중앙값({고정설명})으로 고정해 계산했습니다." if 고정값 else ""))
 
-놓친표 = 놓친표.sort_values(
-    "나이",
-    ascending=True,
-    na_position="last",
-).reset_index(drop=True)
+if len(입력열) >= 3:
+    st.subheader("축 셋으로 돌려 보기")
+    세축 = st.multiselect("3차원 산점도의 축 셋", 입력열, default=입력열[:3], max_selections=3,
+                          format_func=우리말)
+    if len(세축) != 3:
+        st.info("축을 정확히 세 개 골라 주세요.")
+    else:
+        가1, 가2, 가3 = 세축
+        자리 = {열: 번호 for 번호, 열 in enumerate(입력열)}
+        눈금1, 눈금2 = 눈금(가1, 칸수3D), 눈금(가2, 칸수3D)
+        낮은끝, 높은끝 = float(채점입력[가3].min()), float(채점입력[가3].max())
+        그림3D = go.Figure()
+        없는평면 = []
+        for 상태 in (전이름, 후이름):
+            크기맞추기, 확률모델, _ = 모델[상태]
+            계수 = 확률모델.coef_[0].tolist()
+            절편 = float(확률모델.intercept_[0])
+            평균, 폭 = 크기맞추기.mean_.tolist(), 크기맞추기.scale_.tolist()
 
-st.caption(
-    f"목록 기준: {목록설명}. "
-    "나이가 적은 순서로 정렬합니다."
-)
+            def 크기맞춘값(열, 값, 계수=계수, 평균=평균, 폭=폭):
+                i = 자리[열]
+                return 계수[i] * (값 - 평균[i]) / 폭[i]
 
-st.write(f"**놓친 환자 전체: {len(놓친표):,}명**")
+            세로3 = 자리[가3]
+            평면 = None
+            if 계수[세로3] != 0:
+                남은값 = sum(크기맞춘값(열, float(채점입력[열].median()))
+                             for 열 in 입력열 if 열 not in 세축)
+                평면 = []
+                for 값2 in 눈금2:
+                    한줄 = []
+                    for 값1 in 눈금1:
+                        합 = 절편 + 남은값 + 크기맞춘값(가1, 값1) + 크기맞춘값(가2, 값2)
+                        해 = 평균[세로3] - 폭[세로3] * 합 / 계수[세로3]
+                        한줄.append(해 if 낮은끝 <= 해 <= 높은끝 else None)
+                    평면.append(한줄)
+                if all(값 is None for 한줄 in 평면 for 값 in 한줄):
+                    평면 = None
+            if 평면 is None:
+                없는평면.append(상태)
+            else:
+                그림3D.add_trace(go.Surface(x=눈금1, y=눈금2, z=평면, showscale=False, opacity=0.45,
+                                            colorscale=[[0, 색깔[상태]], [1, 색깔[상태]]],
+                                            hoverinfo="skip", name=f"{상태}의 0.5 평면"))
+        점표3 = pd.DataFrame({
+            "축1": 채점입력[가1].to_numpy(), "축2": 채점입력[가2].to_numpy(),
+            "축3": 채점입력[가3].to_numpy(),
+            "실제": pd.Series(실제).map({1: "뇌졸중 있음", 0: "뇌졸중 없음"}).to_numpy(),
+        })
+        for 이름, 색 in (("뇌졸중 없음", "#94a3b8"), ("뇌졸중 있음", "#7f1d1d")):
+            한무리 = 점표3[점표3["실제"] == 이름]
+            그림3D.add_trace(go.Scatter3d(x=한무리["축1"], y=한무리["축2"], z=한무리["축3"],
+                                          mode="markers", name=이름,
+                                          marker=dict(size=3, color=색, opacity=0.6)))
+        그림3D.update_layout(height=620, scene=dict(xaxis_title=우리말(가1), yaxis_title=우리말(가2),
+                                                    zaxis_title=우리말(가3)))
+        st.plotly_chart(그림3D, width="stretch")
+        for 상태 in 없는평면:
+            st.info(f"{상태}: 확률 0.5 평면이 이 그림 안에 없습니다. 그림 안의 어느 자리에서도 확률이 0.5에 "
+                    f"닿지 않기 때문입니다.")
+        st.caption("마우스로 끌면 돌려 볼 수 있습니다. 파란 면은 고치기 전, 붉은 면은 고친 뒤의 0.5 평면입니다."
+                   + (" 축 셋이 아닌 속성은 채점용의 중앙값으로 고정해 계산했습니다." if len(입력열) > 3 else ""))
 
-st.dataframe(
-    놓친표,
-    use_container_width=True,
-    hide_index=True,
-)
-
-st.warning(
-    "이 페이지는 교육용 분류 실험입니다. "
-    "데이터 번호 순으로 앞 최대 1,000명을 채점용으로 사용하므로 "
-    "무작위 표본 평가와 결과가 다를 수 있습니다. "
-    "실제 환자의 진단이나 치료 판단에 사용해서는 안 됩니다."
-)
+상태이름 = 후이름 if 무게맞추기 else 전이름
+st.subheader(f"{상태이름} · 확률로 답하는 모델이 놓친 환자")
+예측값 = 예측[상태이름]["확률로 답하는 모델"]
+채점명단 = df[채점용].copy()
+채점명단["고혈압"] = 채점명단["hypertension"].map({1: "있음", 0: "없음"})
+채점명단["심장병"] = 채점명단["heart_disease"].map({1: "있음", 0: "없음"})
+놓친환자 = 채점명단[(실제 == 1) & (예측값 == 0)].sort_values("age")
+놓친환자 = 놓친환자[["id", "age", "고혈압", "심장병"]].rename(columns={"id": "번호", "age": "나이"})
+st.markdown(f"**모두 {len(놓친환자):,}명**")
+st.dataframe(놓친환자.head(20), width="stretch", hide_index=True)
+st.caption("나이가 적은 순서로 앞 스무 줄까지만 보여 줍니다. 고혈압 칸과 심장병 칸을 함께 읽어 보세요.")
